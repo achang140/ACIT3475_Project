@@ -2,15 +2,16 @@
 
 # Update package list and install NGINX
 sudo apt update -y
-sudo apt install nginx mysql-client -y
+sudo apt install nginx mysql-client awscli -y
+
 
 # MySQL database credentials
-HOST="webdatabase.cxwdtgsgm2fs.us-east-1.rds.amazonaws.com" # RDS MySQL Endpoint
+HOST="mysql-rds.cxwdtgsgm2fs.us-east-1.rds.amazonaws.com" # RDS MySQL Endpoint
 USER="admin"
 PASSWORD="mysqldbfacts"
 DATABASE="Facts"
 
-# mysql -h webdatabase.cxwdtgsgm2fs.us-east-1.rds.amazonaws.com -P 3306 -u admin -p 
+# mysql -h mysql-rds.cxwdtgsgm2fs.us-east-1.rds.amazonaws.com -P 3306 -u admin -p 
 
 mysql -h $HOST -P 3306 -u $USER -p$PASSWORD << EOF
 CREATE DATABASE IF NOT EXISTS $DATABASE;
@@ -57,6 +58,16 @@ echo ']' >> /var/www/html/data.json  # End JSON array
 sudo systemctl start nginx
 sudo systemctl enable nginx
 
+# https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/
+# IMDSv2 - Every request is now protected by session authentication 
+
+TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+
+REGION=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/dynamic/instance-identity/document | awk -F'"' '/region/ {print $4}')
+AVAILABILITY_ZONE=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/placement/availability-zone)
+SUBNET_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -n 1)/subnet-id)
+INSTANCE_ID=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/instance-id)
+
 # Generate the HTML content
 cat > /var/www/html/index.html << HTML
 <!DOCTYPE html>
@@ -74,10 +85,20 @@ cat > /var/www/html/index.html << HTML
             margin: 0;
         }
 
+        ul {
+            position: absolute;
+            top: 0;
+            left: 0;
+            margin: 10px;
+            padding: 0;
+            list-style: none;
+        }
+
         button {
             padding: 10px;
             font-size: 16px;
             cursor: pointer;
+            margin-top: 10px;
         }
 
         div#content-container {
@@ -86,6 +107,12 @@ cat > /var/www/html/index.html << HTML
     </style>
 </head>
 <body>
+    <ul>
+        <li><strong>Region Name:</strong> $REGION</li>
+        <li><strong>Availability Zone:</strong> $AVAILABILITY_ZONE</li>
+        <li><strong>Subnet ID:</strong> $SUBNET_ID</li>
+        <li><strong>Instance ID:</strong> $INSTANCE_ID</li>
+    </ul>
     <button id="fetch-data-button">Generate Facts</button>
     <div id="content-container"></div>
     <script>
@@ -93,7 +120,7 @@ cat > /var/www/html/index.html << HTML
         const contentContainer = document.querySelector('#content-container');
 
         button.addEventListener('click', () => {
-            fetch('http://AppLB-904801898.us-east-1.elb.amazonaws.com/data.json') // Application Load Balancer DNS 
+            fetch('http://ALB-2143078415.us-east-1.elb.amazonaws.com/data.json') // Application Load Balancer DNS 
                 .then(response => response.json())
                 .then(data => {
                     console.log('Data:', data);
